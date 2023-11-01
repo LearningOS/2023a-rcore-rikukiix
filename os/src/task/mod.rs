@@ -14,9 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -54,6 +55,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            task_sys_count: [0; MAX_SYSCALL_NUM],
+            task_start_time: get_time_ms(),
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -135,6 +138,46 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    
+    /// add syscall count of current task
+    pub fn add_sys_count(&self, syscall_id: usize) {
+        if syscall_id > MAX_SYSCALL_NUM {
+            return;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        inner.tasks[current_id].task_sys_count[syscall_id] += 1;
+    }
+    
+    /// get current task's status
+    pub fn get_current_status(&self) -> TaskStatus {
+        // 为啥没有非mut引用啊。。。
+        let inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        let ret = inner.tasks[current_id].task_status;
+        drop(inner);
+        ret
+    }
+    
+    /// get current task's syscall counts
+    pub fn get_current_sys_count(&self) -> [u32; MAX_SYSCALL_NUM] {
+        // 为啥没有非mut引用啊。。。
+        let inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        let ret = inner.tasks[current_id].task_sys_count;
+        drop(inner);
+        ret
+    }
+    
+    /// get current task's syscall up time
+    pub fn get_current_time(&self) -> usize {
+        // 为啥没有非mut引用啊。。。
+        let inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        let ret = get_time_ms() - inner.tasks[current_id].task_start_time;
+        drop(inner);
+        ret
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +211,24 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// add syscall count of current task
+pub fn add_sys_count(syscall_id: usize) {
+    TASK_MANAGER.add_sys_count(syscall_id);
+}
+
+/// Get current running task status
+pub fn get_current_status() -> TaskStatus {
+    TASK_MANAGER.get_current_status()
+}
+
+/// Get current running task syscall count
+pub fn get_current_sys_count() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_current_sys_count()
+}
+
+/// Get current running task time since first start
+pub fn get_current_time() -> usize {
+    TASK_MANAGER.get_current_time()
 }
