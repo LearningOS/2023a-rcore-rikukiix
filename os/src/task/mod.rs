@@ -14,8 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -153,6 +155,60 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    
+    /// add syscall count of current task
+    pub fn add_sys_count(&self, syscall_id: usize) {
+        if syscall_id > MAX_SYSCALL_NUM {
+            return;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        inner.tasks[current_id].task_sys_count[syscall_id] += 1;
+    }
+    
+    /// get current task's status
+    pub fn get_current_status(&self) -> TaskStatus {
+        // 为啥没有非mut引用啊。。。
+        let inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        let ret = inner.tasks[current_id].task_status;
+        drop(inner);
+        ret
+    }
+    
+    /// get current task's syscall counts
+    pub fn get_current_sys_count(&self) -> [u32; MAX_SYSCALL_NUM] {
+        // 为啥没有非mut引用啊。。。
+        let inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        let ret = inner.tasks[current_id].task_sys_count;
+        drop(inner);
+        ret
+    }
+    
+    /// get current task's syscall up time
+    pub fn get_current_time(&self) -> usize {
+        // 为啥没有非mut引用啊。。。
+        let inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        let ret = get_time_us() / 1000 - inner.tasks[current_id].task_start_time;
+        drop(inner);
+        ret
+    }
+    
+    /// mmap
+    pub fn do_mmap(&self, start: usize, len: usize, port: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        inner.tasks[current_id].do_mmap(start, len, port)
+    }
+    
+    /// munmap
+    pub fn do_munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current_id = inner.current_task;
+        inner.tasks[current_id].do_munmap(start, len)
+    }
 }
 
 /// Run the first task in task list.
@@ -186,6 +242,36 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// add syscall count of current task
+pub fn add_sys_count(syscall_id: usize) {
+    TASK_MANAGER.add_sys_count(syscall_id);
+}
+
+/// Get current running task status
+pub fn get_current_status() -> TaskStatus {
+    TASK_MANAGER.get_current_status()
+}
+
+/// Get current running task syscall count
+pub fn get_current_sys_count() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_current_sys_count()
+}
+
+/// Get current running task time since first start
+pub fn get_current_time() -> usize {
+    TASK_MANAGER.get_current_time()
+}
+
+/// mmap
+pub fn do_mmap(start: usize, len: usize, port: usize) -> isize {
+    TASK_MANAGER.do_mmap(start, len, port)
+}
+
+/// munmap
+pub fn do_munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.do_munmap(start, len)
 }
 
 /// Get the current 'Running' task's token.

@@ -1,9 +1,10 @@
 //! Types related to task management
 use super::TaskContext;
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM};
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
+use crate::timer::get_time_us;
 use crate::trap::{trap_handler, TrapContext};
 
 /// The task control block (TCB) of a task.
@@ -28,6 +29,12 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+    
+    /// The task syscall count of each type
+    pub task_sys_count: [u32; MAX_SYSCALL_NUM],
+    
+    /// The task start time
+    pub task_start_time: usize,
 }
 
 impl TaskControlBlock {
@@ -55,6 +62,7 @@ impl TaskControlBlock {
             kernel_stack_top.into(),
             MapPermission::R | MapPermission::W,
         );
+        // let task_start_time = get_time_us() / 1000;
         let task_control_block = Self {
             task_status,
             task_cx: TaskContext::goto_trap_return(kernel_stack_top),
@@ -63,6 +71,8 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            task_sys_count: [0; MAX_SYSCALL_NUM],
+            task_start_time: get_time_us() / 1000,
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +105,30 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    /// mmap
+    pub fn do_mmap(&mut self, start: usize, len: usize, port: usize) -> isize {
+        if !self.memory_set.check_available(start.into(), (start + len).into()) {
+            return -1;
+        }
+        
+        let mut permission = MapPermission::U;
+        if port & 0b1usize != 0 {
+            permission |= MapPermission::R;
+        }
+        if port & 0b10usize != 0 {
+            permission |= MapPermission::W;
+        }
+        if port & 0b100usize != 0 {
+            permission |= MapPermission::X;
+        }
+        self.memory_set.insert_framed_area(start.into(), (start + len).into(), permission);
+        
+        0
+    }
+    /// munmap
+    pub fn do_munmap(&mut self, start: usize, len: usize) -> isize {
+        self.memory_set.free_map_area(start.into(), (start+len).into())
     }
 }
 
