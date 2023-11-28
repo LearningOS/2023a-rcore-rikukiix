@@ -1,9 +1,10 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM};
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE, MapPermission};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -68,6 +69,16 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    
+    /// The task syscall count of each type
+    pub task_sys_count: [u32; MAX_SYSCALL_NUM],
+
+    /// The task start time
+    pub task_start_time: usize,
+
+    pub stride: usize,
+
+    pub priority: usize,
 }
 
 impl TaskControlBlockInner {
@@ -84,6 +95,30 @@ impl TaskControlBlockInner {
     }
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
+    }
+    /// mmap
+    pub fn do_mmap(&mut self, start: usize, len: usize, port: usize) -> isize {
+        if !self.memory_set.check_available(start.into(), (start + len).into()) {
+            return -1;
+        }
+
+        let mut permission = MapPermission::U;
+        if port & 0b1usize != 0 {
+            permission |= MapPermission::R;
+        }
+        if port & 0b10usize != 0 {
+            permission |= MapPermission::W;
+        }
+        if port & 0b100usize != 0 {
+            permission |= MapPermission::X;
+        }
+        self.memory_set.insert_framed_area(start.into(), (start + len).into(), permission);
+
+        0
+    }
+    /// munmap
+    pub fn do_munmap(&mut self, start: usize, len: usize) -> isize {
+        self.memory_set.free_map_area(start.into(), (start+len).into())
     }
 }
 
@@ -118,6 +153,10 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    task_sys_count: [0; MAX_SYSCALL_NUM],
+                    task_start_time: get_time_us() / 1000,
+                    stride: 0,
+                    priority: 16,
                 })
             },
         };
@@ -191,6 +230,10 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    task_sys_count: [0; MAX_SYSCALL_NUM],
+                    task_start_time: get_time_us() / 1000,
+                    stride: 0,
+                    priority: 16,
                 })
             },
         });

@@ -300,6 +300,34 @@ impl MemorySet {
             false
         }
     }
+
+    /// check some virtual address available
+    pub fn check_available(&self, va_begin: VirtAddr, va_end: VirtAddr) -> bool {
+        let vpn_begin = va_begin.floor();
+        let vpn_end = va_end.ceil();
+        for i in vpn_begin.0 .. vpn_end.0 {
+            let vpn = VirtPageNum::from(i);
+            if let Some(pte) = self.translate(vpn) {
+                if pte.ppn().0 != 0 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// free a map area
+    pub fn free_map_area(&mut self, va_begin: VirtAddr, va_end: VirtAddr) -> isize {
+        let vpn_begin = va_begin.floor();
+        let vpn_end = va_end.ceil();
+        for a in self.areas.iter_mut() {
+            if a.vpn_range.get_start() == vpn_begin && a.vpn_range.get_end() == vpn_end {
+                a.unmap(&mut self.page_table);
+                return 0;
+            }
+        }
+        -1
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
