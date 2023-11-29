@@ -12,6 +12,7 @@ pub struct Inode {
     block_offset: usize,
     fs: Arc<Mutex<EasyFileSystem>>,
     block_device: Arc<dyn BlockDevice>,
+    inode_id: u32,
 }
 
 impl Inode {
@@ -21,12 +22,14 @@ impl Inode {
         block_offset: usize,
         fs: Arc<Mutex<EasyFileSystem>>,
         block_device: Arc<dyn BlockDevice>,
+        inode_id: u32,
     ) -> Self {
         Self {
             block_id: block_id as usize,
             block_offset,
             fs,
             block_device,
+            inode_id,
         }
     }
     /// Call a function over a disk inode to read it
@@ -69,6 +72,7 @@ impl Inode {
                     block_offset,
                     self.fs.clone(),
                     self.block_device.clone(),
+                    inode_id,
                 ))
             })
         })
@@ -135,6 +139,7 @@ impl Inode {
             block_offset,
             self.fs.clone(),
             self.block_device.clone(),
+            new_inode_id,
         )))
         // release efs lock automatically by compiler
     }
@@ -182,5 +187,79 @@ impl Inode {
             }
         });
         block_cache_sync_all();
+    }
+    /// get nlink count of a inode_id
+    pub fn get_nlink_count(&self, inode_id: u32) -> u32 {
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| {
+            let filecnt = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut ret = 0;
+            
+            for i in 0..filecnt {
+                let mut dirent = DirEntry::empty();
+                disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device);
+                if dirent.inode_id() == inode_id {
+                    ret += 1;
+                }
+            }
+            
+            ret
+        })
+    }
+    /// add directory entry
+    fn add_dirent(&self, name: &str, inode_id: u32, fs: &mut MutexGuard<EasyFileSystem>) {
+        self.modify_disk_inode(|disk_inode| {
+            let nend = disk_inode.size;
+            let filecnt = (disk_inode.size as usize) / DIRENT_SZ;
+            self.increase_size(((filecnt + 1) * DIRENT_SZ) as u32, disk_inode, fs);
+            let new_dirent = DirEntry::new(name, inode_id);
+            disk_inode.write_at(nend as usize, new_dirent.as_bytes(), &self.block_device)
+        });
+    }
+    /// remove directory entry
+    fn remove_dirent(&self, name: &str, _fs: &mut MutexGuard<EasyFileSystem>) {
+        self.modify_disk_inode(|disk_inode| {
+            let filecnt = (disk_inode.size as usize) / DIRENT_SZ;
+            for i in 0..filecnt {
+                let mut dirent = DirEntry::empty();
+                disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device);
+                if name == dirent.name() {
+                    // dirent = DirEntry::empty();
+                    disk_inode.write_at(i * DIRENT_SZ, DirEntry::empty().as_bytes(), &self.block_device);
+                    return;
+                }
+            }
+        });
+    }
+    /// linkat
+    pub fn linkat(&self, src_name: &str, tar_name: &str) -> isize {
+        if src_name == tar_name {
+            return -1;
+        }
+        let inode_id = self.read_disk_inode(|disk_inode| self.find_inode_id(src_name, disk_inode));
+        match inode_id {
+            None => -1,
+            Some(inode_id) => {
+                let mut fs = self.fs.lock();
+                self.add_dirent(tar_name, inode_id, &mut fs);
+                0
+            }
+        }
+    }
+    /// unlinkat
+    pub fn unlinkat(&self, tar_name: &str) -> isize {
+        let inode_id = self.read_disk_inode(|disk_inode| self.find_inode_id(tar_name, disk_inode));
+        match inode_id {
+            None => -1,
+            Some(_) => {
+                let mut fs = self.fs.lock();
+                self.remove_dirent(tar_name, &mut fs);
+                0
+            }
+        }
+    }
+    /// get inode id
+    pub fn get_inode_id(&self) -> u32 {
+        self.inode_id
     }
 }

@@ -22,7 +22,7 @@ mod switch;
 #[allow(rustdoc::private_intra_doc_links)]
 mod task;
 
-use crate::fs::{open_file, OpenFlags};
+use crate::{fs::{open_file, OpenFlags}};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 use lazy_static::*;
@@ -119,4 +119,51 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+// / add syscall count of current task
+// pub fn add_sys_count(syscall_id: usize) {
+//     if syscall_id > MAX_SYSCALL_NUM {
+//         return;
+//     }
+//     let task = current_task().unwrap();
+//     let mut current = task.inner_exclusive_access();
+//     current.task_sys_count[syscall_id] += 1;
+// }
+// /// get current task's status
+// pub fn get_current_status() -> TaskStatus {
+//     let task = current_task().unwrap();
+//     let current = task.inner_exclusive_access();
+//     let ret = current.task_status;
+//     drop(current);
+//     ret
+// }
+// /// get current task's syscall counts
+// pub fn get_current_sys_count() -> [u32; MAX_SYSCALL_NUM] {
+//     let task = current_task().unwrap();
+//     let current = task.inner_exclusive_access();
+//     let ret = current.task_sys_count;
+//     drop(current);
+//     ret
+// }
+// /// get current task's syscall up time
+// pub fn get_current_time() -> usize {
+//     let task = current_task().unwrap();
+//     let current = task.inner_exclusive_access();
+//     let ret = get_time_us() / 1000 - current.task_start_time;
+//     drop(current);
+//     ret
+// }
+/// mmap
+pub fn do_mmap(start: usize, len: usize, port: usize) -> isize {
+    let task = current_task().unwrap();
+    let mut current = task.inner_exclusive_access();
+    current.do_mmap(start, len, port)
+}
+
+/// munmap
+pub fn do_munmap(start: usize, len: usize) -> isize {
+    let task = current_task().unwrap();
+    let mut current = task.inner_exclusive_access();
+    current.do_munmap(start, len)
 }
